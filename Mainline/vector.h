@@ -1,25 +1,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-typedef struct Tensor {
+typedef struct Vector {
     float* data;
     float* grad;
     int size;
-    struct Tensor** prev;
-    void (*backer)(struct Tensor*, float*, float*);
-} Tensor;
+    struct Vector** prev;
+    void (*backer)(struct Vector*, float*, float*);
+} Vector;
 
-Tensor** bin(Tensor* a, Tensor* b) {
-    Tensor** c = malloc(2*sizeof(Tensor*));
+Vector** binVector(Vector* a, Vector* b) {
+    Vector** c = malloc(2*sizeof(Vector*));
     c[0] = a;
     c[1] = b;
     return c;
 }
 
-Tensor* createTensor(float* data, int data_size) {
-    Tensor* a = malloc(sizeof(Tensor));
+Vector* createVector(float* data, int data_size) {
+    Vector* a = malloc(sizeof(Vector));
     a->data = data;
-    float* grad = (float*)calloc(data_size, sizeof(Tensor));
+    float* grad = (float*)calloc(data_size, sizeof(Vector));
     a->grad = grad;
     a->size = data_size;
     a->prev = NULL;
@@ -27,7 +27,7 @@ Tensor* createTensor(float* data, int data_size) {
     return a;
 }
 
-float item(Tensor* a) {
+float item(Vector* a) {
     if (a->size > 1) {
         fprintf(stderr, "Error: can't take item of tensor, size is %i", a->size);
     }
@@ -42,24 +42,24 @@ float* scalarMultiplyF(float c, float* a, int a_size) {
     return res;
 }
 
-void continueBack(Tensor* a) {
-    if (a->prev != NULL) {
-        a->prev[0]->backer(a->prev[0],a->grad,a->prev[1]->data);
-        a->prev[1]->backer(a->prev[1],a->grad,a->prev[0]->data);
+void continueBack(Vector* a) {
+    if (a->backer != NULL) {
+        a->backer(a->prev[0],a->grad,a->prev[1]->data);
+        a->backer(a->prev[1],a->grad,a->prev[0]->data);
     }
 }
 
-void dotBackward(struct Tensor* a, float* ahead, float* other) {
+void dotBackward(struct Vector* a, float* ahead, float* other) {
     a->grad = scalarMultiplyF(ahead[0], other, a->size);
-    // continueBack(a);
+    continueBack(a);
 }
 
-void sumBackward(struct Tensor* a, float* ahead, float* other) {
+void sumBackward(struct Vector* a, float* ahead, float* other) {
     a->grad = ahead;
     continueBack(a);
 }
 
-Tensor* dot(Tensor* a, Tensor* b) {
+Vector* dot(Vector* a, Vector* b) {
     if (a->size != b->size) {
         fprintf(stderr, "Error: a is of size %i while b is of size %i, can't dot product\n", a->size, b->size);
     }
@@ -67,28 +67,28 @@ Tensor* dot(Tensor* a, Tensor* b) {
     for (int i = 0; i < a->size; i++) {
         c[0] += a->data[i] * b->data[i];
     }
-    Tensor* res = createTensor(c, 1); 
+    Vector* res = createVector(c, 1); 
     res->prev = bin(a,b);
     res->backer = dotBackward;
     return res;
 
 }
 
-Tensor* sum(Tensor* a, Tensor* b) {
+Vector* sum(Vector* a, Vector* b) {
     if (a->size != b->size) {
-        fprintf(stderr, "Error: a is of size %i while b is of size %i, can't dot product\n", a->size, b->size);
+        fprintf(stderr, "Error: a is of size %i while b is of size %i, can't sum\n", a->size, b->size);
     }
     float* c = malloc(a->size*sizeof(float));
     for (int i = 0; i < a->size; i++) {
         c[i] = a->data[i] + b->data[i];
     }
-    Tensor* res = createTensor(c, a->size);
+    Vector* res = createVector(c, a->size);
     res->prev = bin(a,b);
     res->backer = sumBackward;
     return res;
 }
 
-void backward(Tensor* a) {
+void backward(Vector* a) {
     float grad[] = {1};
     a->grad = grad;
     continueBack(a);
