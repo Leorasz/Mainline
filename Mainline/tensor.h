@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -11,6 +12,11 @@ typedef struct Tensor {
     void (*backer)(struct Tensor*);
 } Tensor;
 
+Tensor** singlify(Tensor* a) {
+    Tensor** b = (Tensor**)malloc(sizeof(Tensor*));
+    b[0] = a;
+    return b;
+}
 Tensor** bin(Tensor* a, Tensor* b) {
     Tensor** c = (Tensor**)malloc(2*sizeof(Tensor*));
     c[0] = a;
@@ -20,15 +26,31 @@ Tensor** bin(Tensor* a, Tensor* b) {
 
 float sum(float* a, int size) {
     float collector = 0;
-    for (int i = 0; i < size; i++) {
+    for (int i=0; i < size; i++) {
         collector += a[i];
     }
     return collector;
 }
 
+float* addF(float* a, float* b, int a_numel) {
+    float* c = (float*)malloc(a_numel*sizeof(float));
+    for (int i=0; i < a_numel; i++) {
+        c[i] = a[i] + b[i];
+    }
+    return c;
+}
+
+float* oneArray(int numel) {
+    float* res = (float*)malloc(numel*sizeof(float));
+    for (int i=0; i < numel; i++) {
+        res[i] = 1.0;
+    }
+    return res;
+}
+
 float* scalarMultiplyF(float c, float* a, int a_size) {
     float* res = malloc(a_size*sizeof(float));
-    for (int i = 0; i < a_size; i++) {
+    for (int i=0; i < a_size; i++) {
         res[i] = c * a[i];
     }
     return res;
@@ -43,12 +65,16 @@ int* shapeSwap(int* a) {
 
 float* transposeF(float* a, int* a_shape) {
     float* res = (float*)malloc(a_shape[0]*a_shape[1]*sizeof(float));
-    for (int i = 0; i < a_shape[0]; i++) {
+    for (int i=0; i < a_shape[0]; i++) {
         for (int j = 0; j < a_shape[1]; j++) {
             res[j*a_shape[0]+i] = a[i*a_shape[1]+j];
         }
     }
     return res;
+}
+
+float sigmoidCore(float a) {
+    return 1.0 / (1.0 + exp(-a));
 }
 
 Tensor* createTensor(float* data, int* shape, int num_dims) {
@@ -62,6 +88,9 @@ Tensor* createTensor(float* data, int* shape, int num_dims) {
     float* grad = (float*)calloc(numel, sizeof(float));
     a->grad = grad;
     a->shape = shape;
+    printf("%iaftershaped\n", shape[0]);
+    printf("%iaftershaped\n", shape[1]);
+    printf("%p shapepoiner\n", a->shape);
     a->num_dims = num_dims;
     a->prev = NULL;
     a->backer = NULL;
@@ -89,13 +118,30 @@ void shapeCompare(Tensor* a, Tensor* b, char* name) {
     }
 }
 
-void addBackward(Tensor* a) {
+void meanBackward(Tensor* a) {
+    float squeezer = (float)a->numel / a->prev[0]->numel;
+    float* grad = oneArray(a->prev[0]->numel);
+    grad = scalarMultiplyF(squeezer, grad, a->prev[0]->numel);
+    a->prev[0]->grad = addF(a->prev[0]->grad,grad,a->prev[0]->numel);
+    if (a->prev[0]->backer != NULL) {
+        a->prev[0]->backer(a->prev[0]);
+    }
+}
 
+void addBackward(Tensor* a) {
+    a->prev[0]->grad = addF(a->prev[0]->grad,a->grad,a->numel);
+    a->prev[1]->grad = addF(a->prev[1]->grad,a->grad,a->numel);
+    if (a->prev[0]->backer != NULL) {
+        a->prev[0]->backer(a->prev[0]);
+    }
+    if (a->prev[1]->backer != NULL) {
+        a->prev[1]->backer(a->prev[1]);
+    }
 }
 
 float* matmulBackCore(float* a_grad, int* a_shape, float* ahead, float* other, int* other_shape) {
     for (int i = 0; i < other_shape[0]; i++) { //row of other
-        for (int j = 0; j < other_shape[1]; j++) { //c
+        for (int j = 0; j < other_shape[1]; j++) {
             int pos = i*other_shape[1]+j;
             for (int k = 0; k < a_shape[0]; k++) {
                 a_grad[k*a_shape[1]+i] += other[pos] * ahead[k*other_shape[1]+j];
@@ -113,6 +159,32 @@ void matmulBackward(Tensor* a) {
     a->prev[1]->grad = transposeF(matmulBackCore(transposeF(a->prev[1]->grad, a->prev[1]->shape), shapeSwap(a->prev[1]->shape), a->grad, transposeF(a->prev[0]->data, a->prev[0]->shape), shapeSwap(a->prev[0]->shape)), shapeSwap(a->prev[1]->shape));
     if (a->prev[1]->backer != NULL) {
         a->prev[1]->backer(a);
+    }
+}
+
+void reluBackward(Tensor* a) {
+    float* grad = a->data;
+    for (int i = 0; i < a->numel; i++) {
+        if (grad[i] > 0) {
+            grad[i] = a->grad[i]*1;
+        } else {
+            grad[i] = 0;
+        }
+    }
+    a->prev[0]->grad = addF(a->prev[0]->grad, grad, a->numel);
+    if (a->prev[0]->backer != NULL) {
+        a->prev[0]->backer(a->prev[0]);
+    }
+}
+
+void sigmoidBackward(Tensor* a) {
+    float* grad = a->data;
+    for (int i = 0; i < a->numel; i++) {
+        grad[i] = sigmoidCore(grad[i]) * (1 - sigmoidCore(grad[i]));
+    }
+    a->prev[0]->grad = addF(a->prev[0]->grad, grad, a->numel);
+    if (a->prev[0]->backer != NULL) {
+        a->prev[0]->backer(a->prev[0]);
     }
 }
 
@@ -229,6 +301,8 @@ Tensor* mean(Tensor* a, int dim) {
     } 
 
     Tensor* res = createTensor(b, new_shape, a->num_dims-1);
+    res->prev = singlify(a);
+    res->backer = meanBackward;
     return res;
 
 }
@@ -241,5 +315,34 @@ Tensor* full_mean(Tensor* a) {
     collector[0] = collector[0] / a->numel;
     int res_shape[] = {1};
     Tensor* res = createTensor(collector, res_shape, 1);
+    res->prev = singlify(a);
+    res->backer = meanBackward;
+    return res;
+}
+
+Tensor* reLU(Tensor* a) {
+    int* b_shape = a->shape;
+    float* b = (float*)malloc(a->numel*sizeof(float));
+    for (int i = 0; i < a->numel; i++) {
+        if (a->data[i] < 0.0) {
+            b[i] = 0.0;
+        } else {
+            b[i] = a->data[i];
+        }
+    }
+    Tensor* res = createTensor(b, b_shape, a->num_dims);
+    res->prev = singlify(a);
+    res->backer = reluBackward;
+    return res;
+}
+
+Tensor* sigmoid(Tensor* a) {
+    // float* b = a->data;
+    // for (int i = 0; i < a->numel; i++) {
+    //     b[i] = sigmoidCore(b[i]);
+    // }
+    Tensor* res = createTensor(a->data, a->shape, a->num_dims);
+    res->prev = singlify(a);
+    res->backer = sigmoidBackward;
     return res;
 }
