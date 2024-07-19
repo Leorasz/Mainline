@@ -1,9 +1,0 @@
-{
-    "files.associations": {
-        "tensor.h": "c",
-        "stdlib.h": "c",
-        "math.h": "c",
-        "stdio.h": "c",
-        "nn.h": "c"
-    }
-}
