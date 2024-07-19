@@ -2,6 +2,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+void printFloatP(float* a, int numel) {
+    for (int i = 0; i < numel; i++) {
+        printf("%f\n", a[i]);
+    }
+    printf("----------\n");
+}
+
 typedef struct Tensor {
     float* data;
     float* grad;
@@ -9,6 +16,7 @@ typedef struct Tensor {
     int num_dims;
     int numel;
     struct Tensor** prev;
+    int num_prev;
     void (*backer)(struct Tensor*);
 } Tensor;
 
@@ -87,14 +95,28 @@ Tensor* createTensor(float* data, int* shape, int num_dims) {
     a->numel = numel;
     float* grad = (float*)calloc(numel, sizeof(float));
     a->grad = grad;
-    a->shape = shape;
-    printf("%iaftershaped\n", shape[0]);
-    printf("%iaftershaped\n", shape[1]);
-    printf("%p shapepoiner\n", a->shape);
+    a->shape = (int*)malloc(num_dims * sizeof(int));
+    for (int i = 0; i < num_dims; i++) {
+        a->shape[i] = shape[i];
+    }
     a->num_dims = num_dims;
     a->prev = NULL;
+    a->num_prev = 0;
     a->backer = NULL;
     return a;
+}
+
+Tensor* randomTensor(int* shape, int num_dims) {
+    int numel = 1;
+    for (int i = 0; i < num_dims; i++) {
+        numel = numel * shape[i];
+    }
+    float* data = (float*)malloc(numel*sizeof(float));
+    for (int i = 0; i < numel; i++) {
+        data[i] = ((float)rand()/(float)(RAND_MAX)) * 2.0 - 1.0;
+    }
+    Tensor* res = createTensor(data, shape, num_dims);
+    return res;
 }
 
 float item(Tensor* a) {
@@ -151,22 +173,32 @@ float* matmulBackCore(float* a_grad, int* a_shape, float* ahead, float* other, i
     return a_grad;
 }
 
+float* matmulBackFlip(float* a_grad, int* a_shape, float* ahead, float* other, int* other_shape) {
+    float* grad_flip = transposeF(a_grad, a_shape);
+    int* shape_flip = shapeSwap(a_shape);
+    float* other_flip = transposeF(other, other_shape);
+    int* other_shape_flip = shapeSwap(other_shape);
+    float* unflip_res = matmulBackCore(grad_flip, shape_flip, ahead, other_flip, other_shape_flip);
+    float* res = transposeF(unflip_res, shape_flip);
+    return res;
+}
+
 void matmulBackward(Tensor* a) {
     a->prev[0]->grad = matmulBackCore(a->prev[0]->grad, a->prev[0]->shape, a->grad, a->prev[1]->data, a->prev[1]->shape);
     if (a->prev[0]->backer != NULL) {
-        a->prev[0]->backer(a);
+        a->prev[0]->backer(a->prev[0]);
     }
-    a->prev[1]->grad = transposeF(matmulBackCore(transposeF(a->prev[1]->grad, a->prev[1]->shape), shapeSwap(a->prev[1]->shape), a->grad, transposeF(a->prev[0]->data, a->prev[0]->shape), shapeSwap(a->prev[0]->shape)), shapeSwap(a->prev[1]->shape));
+    a->prev[1]->grad = matmulBackFlip(a->prev[1]->grad, a->prev[1]->shape, a->grad, a->prev[0]->data, a->prev[0]->shape);
     if (a->prev[1]->backer != NULL) {
-        a->prev[1]->backer(a);
+        a->prev[1]->backer(a->prev[1]);
     }
 }
 
 void reluBackward(Tensor* a) {
-    float* grad = a->data;
+    float* grad = (float*)malloc(a->numel*sizeof(float));
     for (int i = 0; i < a->numel; i++) {
-        if (grad[i] > 0) {
-            grad[i] = a->grad[i]*1;
+        if (a->prev[0]->data[i] > 0) {
+            grad[i] = a->grad[i];
         } else {
             grad[i] = 0;
         }
@@ -178,9 +210,10 @@ void reluBackward(Tensor* a) {
 }
 
 void sigmoidBackward(Tensor* a) {
-    float* grad = a->data;
+    float* grad = (float*)malloc(a->numel*sizeof(float));
+    float* data = a->data;
     for (int i = 0; i < a->numel; i++) {
-        grad[i] = sigmoidCore(grad[i]) * (1 - sigmoidCore(grad[i]));
+        grad[i] = data[i] * (1 - data[i]) * a->grad[i];
     }
     a->prev[0]->grad = addF(a->prev[0]->grad, grad, a->numel);
     if (a->prev[0]->backer != NULL) {
@@ -201,6 +234,16 @@ void backward(Tensor* a) {
         fprintf(stderr, "Error: cannot take backward of original tensor");
         exit(1);
     }
+    float grad2[] = {1};
+    a->grad = grad;
+}
+
+void step(Tensor* a, float lr) {
+    float* diff = scalarMultiplyF(-lr, a->grad, a->numel);
+    a->data = addF(a->data, diff, a->numel);
+    for (int i = 0; i < a->num_prev; i++) {
+        step(a->prev[i], lr);
+    }
 }
 
 Tensor* add(Tensor* a, Tensor* b) {
@@ -212,6 +255,7 @@ Tensor* add(Tensor* a, Tensor* b) {
     }
     Tensor* res = createTensor(c, a->shape, a->num_dims);
     res->prev = bin(a,b);
+    res->num_prev = 2;
     res->backer = addBackward;
     return res;
 }
@@ -232,7 +276,7 @@ Tensor* matmul(Tensor* a, Tensor* b) {
         for (int j = 0; j < b->shape[1]; j++) {
             float entry = 0;
             for (int k = 0; k < a->shape[1]; k++) {
-                entry += a->data[i*a->shape[1]+k]*b->data[k*b->shape[0]+j];
+                entry += a->data[i*a->shape[1]+k]*b->data[k*b->shape[1]+j];
             }
             c[pos_counter] = entry;
             pos_counter++;
@@ -241,6 +285,7 @@ Tensor* matmul(Tensor* a, Tensor* b) {
     int c_shape[] = {a->shape[0],b->shape[1]};
     Tensor* res = createTensor(c, c_shape, 2);
     res->prev = bin(a,b);
+    res->num_prev = 2;
     res->backer = matmulBackward;
     return res;
 
@@ -302,6 +347,7 @@ Tensor* mean(Tensor* a, int dim) {
 
     Tensor* res = createTensor(b, new_shape, a->num_dims-1);
     res->prev = singlify(a);
+    res->num_prev = 1;
     res->backer = meanBackward;
     return res;
 
@@ -316,33 +362,35 @@ Tensor* full_mean(Tensor* a) {
     int res_shape[] = {1};
     Tensor* res = createTensor(collector, res_shape, 1);
     res->prev = singlify(a);
+    res->num_prev = 1;
     res->backer = meanBackward;
     return res;
 }
 
 Tensor* reLU(Tensor* a) {
-    int* b_shape = a->shape;
     float* b = (float*)malloc(a->numel*sizeof(float));
     for (int i = 0; i < a->numel; i++) {
-        if (a->data[i] < 0.0) {
-            b[i] = 0.0;
+        if (a->data[i] < 0) {
+            b[i] = 0;
         } else {
             b[i] = a->data[i];
         }
     }
-    Tensor* res = createTensor(b, b_shape, a->num_dims);
+    Tensor* res = createTensor(b, a->shape, a->num_dims);
     res->prev = singlify(a);
+    res->num_prev = 1;
     res->backer = reluBackward;
     return res;
 }
 
 Tensor* sigmoid(Tensor* a) {
-    // float* b = a->data;
-    // for (int i = 0; i < a->numel; i++) {
-    //     b[i] = sigmoidCore(b[i]);
-    // }
-    Tensor* res = createTensor(a->data, a->shape, a->num_dims);
+    float* b = (float*)malloc(a->numel*sizeof(float));
+    for (int i = 0; i < a->numel; i++) {
+        b[i] = sigmoidCore(a->data[i]);
+    }
+    Tensor* res = createTensor(b, a->shape, a->num_dims);
     res->prev = singlify(a);
+    res->num_prev = 1;
     res->backer = sigmoidBackward;
     return res;
 }

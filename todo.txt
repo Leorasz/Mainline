@@ -1,0 +1,5 @@
+TODO:
+-Functional MNIST
+-Speed testing
+-Optimization
+-Metal

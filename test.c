@@ -1,16 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include "Mainline/vector.h"
+#include "Mainline/tensor.h"
+
 
 int main() {
-    float a[] = {1,2,3};
-    float b[] = {4,5,6};
-    float d[] = {3,2,1};
-    Vector* at = createVector(a, 3);
-    Vector* bt = createVector(b, 3);
-    Vector* ct = sum(at,bt);
-    Vector* dt = createVector(d, 3);
-    Vector* et = dot(ct, dt);
-    backward(et);
-    printf("%f\n", dt->grad[1]);
+    float a[] = {0.5};
+    int a_shape[] = {1};
+    Tensor* at = createTensor(a, a_shape, 1);
+    Tensor* bt = reLU(at);
+    backward(bt);
+    printFloatP(at->grad, 1);
+    return 0;
+
 }
