@@ -1,5 +1,3 @@
-#include <stdio.h>
-#include <stdlib.h>
 #include "tensor.h"
 
 typedef struct NeuralNet {
@@ -36,30 +34,23 @@ NeuralNet* createNet(int input_d, int* layer_dims, int num_layers, Tensor* (*act
     return res;
 }
 
-Tensor** netForward(NeuralNet* net, Tensor* input) {
+Tensor* netForward(NeuralNet* net, Tensor* input) {
     if (input->shape[1] != net->weights[0]->shape[0]) {
         fprintf(stderr, "Input dimension is off, input dimension 1 is %i while net weight 0 dimension 0 is %i", input->shape[1], net->weights[0]->shape[0]);
         exit(1);
     }
-    int num_hold_spots = 3*(net->num_layers)+1;
-    Tensor** holder = (Tensor**)malloc(num_hold_spots*sizeof(Tensor));
+    Tensor** holder = (Tensor**)malloc(sizeof(Tensor));
     holder[0] = input;
-    int counter = 1;
     for (int i = 0; i < net->num_layers; i++) {
-        Tensor* product = matmul(holder[counter-1],net->weights[i]);
-        holder[counter] = product;
-        counter++;
+        Tensor* product = matmul(holder[0],net->weights[i]);
         Tensor* sum = add(product, net->biases[i]);
-        holder[counter] = sum;
-        counter++;
         Tensor* activated;
         if (i == net->num_layers - 1) {
             activated = net->last_activator(sum);
         } else {
             activated = net->activator(sum);
         }
-        holder[counter] = activated;
-        counter++;
+        holder[0] = activated;
     }
-    return holder;
+    return holder[0];
 }

@@ -3,3 +3,9 @@ TODO:
 -Speed testing
 -Optimization
 -Metal
+-Hyperparameter Optimization
+-Skip backprop- train a GAN without a repetition
+-Feedbackward net
+-Variable input/output handling with batches
+-Stop checking for certain errors once impossible for them to happen (i.e. you already know A and B's shapes will always be good for matmul from the first run, so you don't check every time)
+
