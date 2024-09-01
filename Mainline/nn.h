@@ -19,12 +19,12 @@ NeuralNet* createNet(int input_d, int* layer_dims, int num_layers, Tensor* (*act
         } else {
             weights_shape[0] = layer_dims[i-1];
         }
+        float edge_range = sqrt(1/(float)weights_shape[0]);
         weights_shape[1] = layer_dims[i];
-        weights[i] = randomTensor(weights_shape, 2);
-        int* bias_shape = (int*)malloc(2*sizeof(int));
-        bias_shape[0] = 1;
-        bias_shape[1] = layer_dims[i];
-        biases[i] = randomTensor(bias_shape, 2);
+        weights[i] = randomTensor(weights_shape, 2, -edge_range, edge_range);
+        int* bias_shape = (int*)malloc(sizeof(int));
+        bias_shape[0] = layer_dims[i];
+        biases[i] = randomTensor(bias_shape, 1, -edge_range, edge_range);
     }
     res->weights = weights;
     res->biases = biases;
@@ -39,18 +39,30 @@ Tensor* netForward(NeuralNet* net, Tensor* input) {
         fprintf(stderr, "Input dimension is off, input dimension 1 is %i while net weight 0 dimension 0 is %i", input->shape[1], net->weights[0]->shape[0]);
         exit(1);
     }
-    Tensor** holder = (Tensor**)malloc(sizeof(Tensor));
-    holder[0] = input;
+    Tensor* holder = input;
     for (int i = 0; i < net->num_layers; i++) {
-        Tensor* product = matmul(holder[0],net->weights[i]);
-        Tensor* sum = add(product, net->biases[i]);
+        Tensor* product = matmul(holder,net->weights[i]);
+        // printf("The input times the weights\n");
+        // printTensor(product);
+        Tensor* bigbias = dimExpand(net->biases[i], product->shape[0], 0);
+        Tensor* sum = add(product, bigbias);
+        // printf("The sum of the product and the bias\n");
+        // printTensor(sum);
         Tensor* activated;
         if (i == net->num_layers - 1) {
+            // printf("Z for the last layer\n");
+            // printTensor(sum);
             activated = net->last_activator(sum);
         } else {
             activated = net->activator(sum);
         }
-        holder[0] = activated;
+        // printf("Activated for layer %i\n", i);
+        // printTensor(activated);
+        // printf("Printing weights\n");
+        // printTensor(net->weights[0]);
+        // printf("Printing biases\n");
+        // printTensor(net->biases[0]);
+        holder = activated;
     }
-    return holder[0];
+    return holder;
 }

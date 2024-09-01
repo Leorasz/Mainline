@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /*
 FUNCTION NAMING CONVENTIONS:
@@ -67,17 +68,13 @@ float* dimSumCore(float* a, int* shape, int num_dims, int numel, int dim) {
         }
     }
 
-    // int new_numel = 1;
-    // for (int i = 0; i < num_dims -1; i++) {
-    //     new_numel *= new_shape[i];
-    // }
     int new_numel = numel / shape[new_dim];
     
     int* start_spots = (int*)malloc(new_numel*sizeof(int));
     int block_count = 0;
     int spot_pos = 0;
     //finding the spots to start counting the sum from 
-    for (int i=0; i < numel; i++) {
+    for (int i=0; i < new_numel; i++) {
         start_spots[i] = spot_pos;
         block_count++;
         if (block_count >= skip) {
@@ -186,10 +183,11 @@ float* onesCore(int numel) {
     return res;
 }
 
-float* randomCore(int numel) {
+float* randomCore(int numel, float start_range, float stop_range) {
     float* res = (float*)malloc(numel*sizeof(float));
+    float range = stop_range - start_range;
     for (int i=0; i < numel; i++) {
-        res[i] = ((float)rand()/(float)(RAND_MAX)) * 2.0 - 1.0;
+        res[i] = ((float)rand()/(float)(RAND_MAX)) * range + start_range;
     }
     return res;
 }
@@ -331,6 +329,30 @@ float* matmulCore(float* a, float* b, int* a_shape, int* b_shape) {
     return res;
 }
 
+float* softmaxCore(float* a, int* a_shape, int a_num_dims, int a_numel, int dim) {
+    float* ed = exponentiateCore(a, a_numel);
+    int new_dim = dim;
+    if (dim < 0) {
+        new_dim = a_num_dims+dim;
+    }
+    int* new_shape = (int*)malloc((a_num_dims-1)*sizeof(int));
+    int hit = 0;
+    for (int i = 0; i < a_num_dims; i++) {
+        if (i == new_dim) {
+            hit = 1;
+        } else if (hit == 0) {
+            new_shape[i] = a_shape[i];
+        } else {
+            new_shape[i-1] = a_shape[i];
+        }
+    }
+    float* summed = dimSumCore(ed, a_shape, a_num_dims, a_numel, dim);
+    float* flipped_summed = powerCore(-1.0, summed, (int)(a_numel/a_shape[new_dim]));
+    float* re_expanded = dimExpandCore(flipped_summed, new_shape, (int)(a_numel/a_shape[new_dim]), a_num_dims-1, a_shape[new_dim], new_dim);
+    float* res = elementwiseMultCore(ed, re_expanded, a_numel);
+    return res;
+}
+
 typedef struct Tensor {
     float* data;
     float* grad;
@@ -342,10 +364,11 @@ typedef struct Tensor {
     int num_prev;
     void (*backer)(struct Tensor*);
     int other_data;
+    char *backer_name;
 } Tensor;
 
 void printTensor(Tensor* a) {
-    printFloatP(a->data, a->numel);
+    printFloatP(a->data, 10);
     printIntP(a->shape, a->num_dims);
 }
 
@@ -385,6 +408,7 @@ Tensor* createTensor(float* data, int* shape, int num_dims) {
     res->num_prev = 0;
     res->backer = NULL;
     res->other_data = 0;
+    res->backer_name = NULL;
     return res;
 }
 
@@ -398,12 +422,12 @@ Tensor* onesTensor(int* shape, int num_dims) {
     return res;
 }
 
-Tensor* randomTensor(int* shape, int num_dims) {
+Tensor* randomTensor(int* shape, int num_dims, float start_range, float stop_range) {
     int numel = 1;
     for (int i = 0; i < num_dims; i++) {
         numel = numel * shape[i];
     } //this numel calculation gets repeated, but idk what to do
-    float* data = randomCore(numel);
+    float* data = randomCore(numel, start_range, stop_range);
     Tensor* res = createTensor(data, shape, num_dims);
     return res;
 }
@@ -430,6 +454,16 @@ int elementwiseShapeCompare(Tensor* a, Tensor* b) {
 
 void next_step(Tensor* a) {
     for (int i = 0; i < a->num_prev; i++) {
+        int nanned = 0;
+        for (int j = 0; j < a->prev[i]->numel; j++) {
+            if (isnan(a->prev[i]->grad[j])) {
+                nanned = 1;
+                break;
+            }
+        }
+        if (nanned == 1) {
+            // printf("The tensor that was created by %s and is going into %s has been nanned\n", a->prev[i]->backer_name, a->backer_name);
+        }
         if (a->prev[i]->backer != NULL && a->prev[i]->requires_grad == 1) {
             a->prev[i]->backer(a->prev[i]);
         }
@@ -437,20 +471,23 @@ void next_step(Tensor* a) {
 }
 
 void powerBackward(Tensor* a) {
-    //0 is the exponent, 1 is the base
-    //d/dx a^x = a^x * ln(x)
-    float* new_grad0 = elementwiseMultCore(a->grad, a->data, a->numel);
-    float* nat = naturalLogCore(a->prev[1]->data, a->numel);
-    new_grad0 = elementwiseMultCore(new_grad0, nat, a->numel);
-    a->prev[0]->grad = fullSumCore(new_grad0, a->numel);
-    float* new_grad1 = powerCore(item(a->prev[0])-1, a->prev[1]->data, a->numel);
-    new_grad1 = scalarMultCore(item(a->prev[0]), new_grad1, a->numel);
-    a->prev[1]->grad = elementwiseMultCore(new_grad1, a->grad, a->numel);
+    float scalar = log(a->data[0]) / log(a->prev[0]->data[0]);
+    float* powered = powerCore(scalar-1, a->prev[0]->data, a->numel);
+    float* multed = scalarMultCore(scalar, powered, a->numel);
+    a->prev[0]->grad = elementwiseMultCore(a->grad, multed, a->numel);
     next_step(a);
 }
 
 void exponentiateBackward(Tensor* a) {
     a->prev[0]->grad = elementwiseMultCore(a->grad, a->data, a->numel);
+    next_step(a);
+}
+
+void naturalLogBackward(Tensor* a) {
+    float* adder = fullExpandCore(1e-7, a->numel);
+    float* added = addCore(adder, a->prev[0]->data, a->numel);
+    float* flipped = powerCore(-1, added, a->numel);
+    a->prev[0]->grad = elementwiseMultCore(a->grad, flipped, a->numel);
     next_step(a);
 }
 
@@ -460,7 +497,7 @@ void dimExpandBackward(Tensor* a) {
 }
 
 void fullSumBackward(Tensor* a) {
-    a->prev[0]->grad = fullExpandCore(item(a), a->prev[0]->numel);
+    a->prev[0]->grad = fullExpandCore(a->grad[0], a->prev[0]->numel);
     next_step(a);
 }
 
@@ -482,10 +519,15 @@ void elementwiseMultBackward(Tensor* a) {
 }
 
 void scalarMultBackward(Tensor* a) {
-    float* new_grad0 = fullSumCore(a->prev[1]->data, a->numel);
-    float* new_grad1 = fullExpandCore(a->prev[0]->data[0], a->numel);
+    float scalar = 1;
+    for (int i = 0; i < a->numel; i++) {
+        if (a->prev[0]->data[i] != 0) {
+            scalar = a->data[i] / a->prev[0]->data[i];
+            break;
+        }
+    }
+    float* new_grad0 = fullExpandCore(scalar, a->numel);
     a->prev[0]->grad = elementwiseMultCore(a->grad, new_grad0, a->numel);
-    a->prev[1]->grad = elementwiseMultCore(a->grad, new_grad1, a->numel);
     next_step(a);
 }
 
@@ -513,11 +555,23 @@ void reLUBackward(Tensor* a) {
     next_step(a);
 }
 
+void softmaxBackward(Tensor* a) {
+    float* softmax1 = softmaxCore(a->prev[0]->data, a->shape, a->num_dims, a->numel, a->other_data);
+    float* squared = powerCore(2.0, softmax1, a->numel);
+    float* negged = scalarMultCore(-1.0, squared, a->numel);
+    float* subtracted = addCore(softmax1, negged, a->numel);
+    a->prev[0]->grad = elementwiseMultCore(subtracted, a->grad, a->numel);
+    next_step(a);
+}
+
 void backward(Tensor* a) {
     if (a->numel != 1) {
         fprintf(stderr, "Error: cannot backward a tensor with more than one element");
         exit(1);
     }
+    float* base = (float*)malloc(sizeof(float));
+    base[0] = 1.0;
+    a->grad = base;
     if (a->backer != NULL) {
         a->backer(a);
     } else {
@@ -533,15 +587,19 @@ void step(Tensor* a, float lr) {
         for (int i = 0; i < a->num_prev; i++) {
             step(a->prev[i], lr);
         }
+        if (a->num_prev != 0) {
+            free(a);
+        }
     }
 }
 
-Tensor* power(Tensor* exponent, Tensor* a) {
-    float* res_data = powerCore(item(exponent), a->data, a->numel);
+Tensor* power(float exponent, Tensor* a) {
+    float* res_data = powerCore(exponent, a->data, a->numel);
     Tensor* res = createTensor(res_data, a->shape, a->num_dims);
-    res->prev = _double(exponent, a);
-    res->num_prev = 2;
+    res->prev = _single(a);
+    res->num_prev = 1;
     res->backer = powerBackward;
+    res->backer_name = "power";
     return res;
 }
 
@@ -551,6 +609,7 @@ Tensor* exponentiate(Tensor* a) {
     res->prev = _single(a);
     res->num_prev = 1;
     res->backer = exponentiateBackward;
+    res->backer_name = "exponentiate";
     return res;
 }
 
@@ -561,6 +620,7 @@ Tensor* fullExpand(float a, int* shape, int num_dims) {
     }
     float* res_data = fullExpandCore(a, numel);
     Tensor* res = createTensor(res_data, shape, num_dims);
+    res->backer_name = "full_expand";
     return res;
 }
 
@@ -589,6 +649,7 @@ Tensor* dimExpand(Tensor* a, int expand_size, int expand_spot) {
     res->num_prev = 1;
     res->backer = dimExpandBackward;
     res->other_data = expand_spot;
+    res->backer_name = "dim expand";
     return res;
 }
 
@@ -599,6 +660,7 @@ Tensor* fullSum(Tensor* a) {
     res->prev = _single(a);
     res->num_prev = 1;
     res->backer = fullSumBackward;
+    res->backer_name = "fullSum";
     return res;
 }
 
@@ -626,6 +688,7 @@ Tensor* dimSum(Tensor* a, int dim) {
     res->num_prev = 1;
     res->backer = dimSumBackward;
     res->other_data = new_dim;
+    res->backer_name = "dimSum";
     return res;
 }
 
@@ -646,6 +709,7 @@ Tensor* add(Tensor* a, Tensor* b) {
     res->prev = _double(a,b);
     res->num_prev = 2;
     res->backer = addBackward;
+    res->backer_name = "add";
     return res;
 }
 
@@ -666,6 +730,7 @@ Tensor* elementwiseMult(Tensor* a, Tensor* b) {
     res->prev = _double(a,b);
     res->num_prev = 2;
     res->backer = elementwiseMultBackward;
+    res->backer_name = "elementWiseMult";
     return res; 
 }
 
@@ -681,17 +746,30 @@ Tensor* dimMean(Tensor* a, int dim) {
     return res;
 }
 
-Tensor* scalarMult(Tensor* a, Tensor* b) {
-    if (a->numel != 1) {
-        fprintf(stderr, "Error: Can't scalar multiply using A as scalar, its numel is %i, not 1", a->numel);
-        exit(1);
-    }
-    float* res_data = scalarMultCore(item(a), b->data, a->numel);
-    Tensor* res = createTensor(res_data, a->shape, a->num_dims);
-    res->prev = _double(a,b);
-    res->num_prev = 2;
+Tensor* scalarMult(float a, Tensor* b) {
+    float* res_data = scalarMultCore(a, b->data, b->numel);
+    Tensor* res = createTensor(res_data, b->shape, b->num_dims);
+    res->prev = _single(b);
+    res->num_prev = 1;
     res->backer = scalarMultBackward;
+    res->backer_name = "scalarMult";
     return res; 
+}
+
+Tensor* fullMean(Tensor* a) {
+    Tensor* sum = fullSum(a);
+    Tensor* res = scalarMult(1/(float)a->numel, sum);
+    return res;
+}
+
+Tensor* naturalLog(Tensor* a) {
+    float* res_data = naturalLogCore(a->data, a->numel);
+    Tensor* res = createTensor(res_data, a->shape, a->num_dims);
+    res->prev = _single(a);
+    res->num_prev = 1;
+    res->backer = naturalLogBackward;
+    res->backer_name = "naturalLog";
+    return res;
 }
 
 Tensor* matmul(Tensor* a, Tensor* b) {
@@ -719,6 +797,7 @@ Tensor* matmul(Tensor* a, Tensor* b) {
     res->prev = _double(a,b);
     res->num_prev = 2;
     res->backer = matmulBackward;
+    res->backer_name = "matmul";
     return res;
 }
 
@@ -728,6 +807,7 @@ Tensor* sigmoid(Tensor* a) {
     res->prev = _single(a);
     res->num_prev = 1;
     res->backer = sigmoidBackward;
+    res->backer_name = "sigmoid";
     return res;
 }
 
@@ -737,22 +817,90 @@ Tensor* reLU(Tensor* a) {
     res->prev = _single(a);
     res->num_prev = 1;
     res->backer = reLUBackward;
+    res->backer_name = "reLU";
     return res;
 }
 
 Tensor* softmax(Tensor* a, int dim) {
     Tensor* ed = exponentiate(a);
     Tensor* summed = dimSum(ed, dim);
-    float minus_one[] = {-1.0};
-    int minus_shape[] = {1};
-    Tensor* minus = createTensor(minus_one, minus_shape, 1);
-    minus->requires_grad = 0;
-    Tensor* flipped_summed = power(minus, summed);
+    Tensor* flipped_summed = power(-1.0, summed);
     int new_dim = dim;
     if (dim < 0) {
         new_dim = a->num_dims+dim;
     }
     Tensor* re_expanded = dimExpand(flipped_summed, ed->shape[new_dim], new_dim);
     Tensor* res = elementwiseMult(ed, re_expanded);
+    return res;
+}
+
+Tensor* stupidSoftmax(Tensor* a, int dim) { //I use this one because the other function creates a loop in the backprop tree
+    float* res_data = softmaxCore(a->data, a->shape, a->num_dims, a->numel, dim);
+    Tensor* res = createTensor(res_data, a->shape, a->num_dims);
+    res->prev = _single(a);
+    res->num_prev = 1;
+    res->backer = softmaxBackward;
+    res->backer_name = "softmax";
+    res->other_data = dim;
+    return res;
+}
+
+Tensor* last_softmax(Tensor* a) {
+    return stupidSoftmax(a, -1);
+}
+
+Tensor** split(Tensor* a, int batch_size, int* num_tens) {
+    int num_main_res = (int)(a->shape[0]/batch_size);
+    int num_res = num_main_res;
+    if (a->shape[0]%batch_size != 0) {
+        num_res++;
+    }
+    *num_tens = num_res;
+    Tensor** res = (Tensor**)malloc(num_res*sizeof(Tensor*));
+    int skip_num = (int)(a->numel / a->shape[0]);
+    int batch_numel = skip_num * batch_size;
+    int* new_shape = (int*)malloc(a->num_dims*sizeof(int));
+    memcpy(new_shape, a->shape, a->num_dims*sizeof(int));
+    new_shape[0] = batch_size;
+    for (int i = 0; i < num_main_res; i++) {
+        float* data = (float*)malloc(batch_numel*sizeof(float));
+        int start = i*batch_numel;
+        int end = (i+1)*batch_numel;
+        for (int j = start; j < end; j++) {
+            data[j-start] = a->data[j];
+        }
+        Tensor* new_tens = createTensor(data, new_shape, a->num_dims); 
+        new_tens->requires_grad = 0;
+        res[i] = new_tens;
+    }
+    if (num_main_res != num_res) {
+        int last_batch_numel = skip_num * (a->shape[0]%batch_size);
+        int* last_new_shape = (int*)malloc(a->num_dims*sizeof(int));
+        memcpy(last_new_shape, a->shape, a->num_dims*sizeof(int));
+        last_new_shape[0] = a->shape[0]%batch_size;
+        float* data = (float*)malloc(last_batch_numel*sizeof(float));
+        int start = num_main_res*batch_numel;
+        int end = a->numel;
+        for (int i = start; i < end; i++) {
+            data[i-start] = a->data[i];
+        }
+        Tensor* new_tens = createTensor(data, last_new_shape, a->num_dims);
+        new_tens->requires_grad = 0;
+        res[num_main_res] = new_tens;
+    }
+    return res;
+}
+
+Tensor* crossEntropy(Tensor* a, Tensor* b, int dim) {
+    Tensor* logged = naturalLog(b);
+    // printf("The logged version of the output of the nn\n");
+    // printTensor(logged);
+    Tensor* multed = elementwiseMult(a, logged);
+    // printf("The logged multiplied by the labels\n");
+    // printTensor(multed);
+    Tensor* negated = scalarMult(-1.0, multed);
+    Tensor* res = dimSum(negated, dim);
+    // printf("The final entropy\n");
+    // printTensor(res);
     return res;
 }
