@@ -42,26 +42,14 @@ Tensor* netForward(NeuralNet* net, Tensor* input) {
     Tensor* holder = input;
     for (int i = 0; i < net->num_layers; i++) {
         Tensor* product = matmul(holder,net->weights[i]);
-        // printf("The input times the weights\n");
-        // printTensor(product);
         Tensor* bigbias = dimExpand(net->biases[i], product->shape[0], 0);
         Tensor* sum = add(product, bigbias);
-        // printf("The sum of the product and the bias\n");
-        // printTensor(sum);
         Tensor* activated;
         if (i == net->num_layers - 1) {
-            // printf("Z for the last layer\n");
-            // printTensor(sum);
             activated = net->last_activator(sum);
         } else {
             activated = net->activator(sum);
         }
-        // printf("Activated for layer %i\n", i);
-        // printTensor(activated);
-        // printf("Printing weights\n");
-        // printTensor(net->weights[0]);
-        // printf("Printing biases\n");
-        // printTensor(net->biases[0]);
         holder = activated;
     }
     return holder;
